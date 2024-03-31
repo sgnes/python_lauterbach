@@ -39,12 +39,20 @@ This tool is part of [EcuAutoTest](https://github.com/sgnes/EcuAutoTest),  EcuAu
 ### A demo:
 
 ```python
-from python_canalyzer import PythonCanalyzer
+from python_lauterbach import python_lauterbach
 
-canalyzer = PythonCanalyzer(r"E:\test\j1939.cfg", capl_path = r"E:\test\Config\Canalyzer\capl.can")
-canalyzer.call_capl('CCVS1_RX_SA_232_EngShutdownOverrideSwitch', 3)
-canalyzer.get_can_bus_signal_value(0, "DM01_T1", "DTC1")
-canalyzer.send_can_bus_signal_value(0, "CCVS1_RX_SA_232", "EngShutdownOverrideSwitch",3)
+with PythonLauterbach("C:/Lauterbach/T32_2022-02", "D:/test/debug.elf", "D:/test/setup.cmm") as debugger:
+    # To read out a char TestArray[32] value;
+    value = debugger.read_string_array_variable_value("TestArray", 32)
+    # To read out a char *TestPointerArray[32] value;
+    value = debugger.read_string_pointer_variable_value("TestPointerArray", 32)
+    # To write a global arrary variable char TestArray[32] with data "AABBCC"
+    debugger.write_string_array_variable_value("TestArray", "AABBCC")
+    # To raed a none variable value, TestArray[1]
+    value = debugger.read_variable_value("TestArray[1]")
+    # To write a none variable value, TestArray[1]
+    debugger.write_variable_value("TestArray[1]", "A")
+
 ```
 
 
@@ -56,7 +64,7 @@ We use [SemVer](http://semver.org/) for versioning. For the versions available, 
 
 * **[Sgnes](sgnes0514@gmail.com)** - *Initial work* - 
 
-See also the list of [contributors](https://github.com/sgnes/PythonCanalyzer/contributors) who participated in this project.
+See also the list of [contributors](https://github.com/sgnes/python_lauterbach/contributors) who participated in this project.
 
 ## License
 
@@ -64,6 +72,4 @@ This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md
 
 ## Acknowledgments
 
-* Hat tip to anyone whose code was used
-* Inspiration
-* etc
+
