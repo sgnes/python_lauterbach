@@ -2,42 +2,37 @@
 import subprocess
 import os
 import time
-import logging
-from logging import config
 import lauterbach.trace32.rcl as t32
+from loguru import logger as loguru_logger
 
-log_config = {
-    "version":1,
-    "root":{
-        "handlers" : ["console"],
-        "level": "DEBUG"
-    },
-    "handlers":{
-        "console":{
-            "formatter": "std_out",
-            "class": "logging.StreamHandler",
-            "level": "DEBUG"
-        }
-    },
-    "formatters":{
-        "std_out": {
-            "format": "%(asctime)s : %(levelname)s : %(module)s : %(funcName)s : %(lineno)d : (Process Details : (%(process)d, %(processName)s), Thread Details : (%(thread)d, %(threadName)s)) Log : %(message)s",
-            "datefmt":"%d-%m-%Y %I:%M:%S"
-        }
-    },
-}
 
 
 class PythonLauterbach():
     """A python lib to easy connect with Lauterbach"""
-    def __init__(self,t32_path, elf_path, setup_cmm, logger=None, t32_config="config.t32", protocol="TCP", node="localhost", port=20000) -> None:
-        if not logger:
-            config.dictConfig(log_config)
-            self.logger = logging.getLogger(__name__)
-        else:
-            self.logger = logger or logging.getLogger(__name__)
+    def __init__(self,t32_path, elf_path, setup_cmm, cpu = "TC387QP", flash_cmm = "~~/demo/tricore/flash/tc38x.cmm",hex_file=None, logger=None, t32_config="config.t32", protocol="TCP", node="localhost", port=20000) -> None:
+        """_summary_
+
+        Args:
+            t32_path (string): T32 full path, "C:\T32\bin\windows64\t32mtc.exe" for Aurix.
+            elf_path (string): full path of the elf file for debug.
+            setup_cmm (string): a setup a cmm file, setup cpu, mutil core setting...
+            cpu (str, optional): CPU model. Defaults to "TC387QP".
+            flash_cmm (str, optional): the flash cmm privded by Lauterbach. Defaults to "~~/demo/tricore/flash/tc38x.cmm".
+            hex_file (string, optional): hex file name. Defaults to None.
+            logger (object, optional): logger object. Defaults to None.
+            t32_config (str, optional): T32 connfig file. Defaults to "config.t32".
+            protocol (str, optional): RCL protocol. Defaults to "TCP".
+            node (str, optional): RCL host. Defaults to "localhost".
+            port (int, optional): RCL Port. Defaults to 20000.
+
+        Raises:
+            FileNotFoundError: _description_
+        """
+        self.logger = logger if logger else loguru_logger
         self.logger.info("Enter init with parameters %s  %s, %s", t32_path, elf_path, setup_cmm)
         self._t32_path = t32_path
+        self.cpu = cpu
+        self.flash_cmm = flash_cmm
         if os.path.exists(self._t32_path):
             self._t32_root = self._t32_path.split("bin")[0]
         else:
@@ -53,11 +48,15 @@ class PythonLauterbach():
             if not os.path.exists(self._t32_config):
                 raise FileNotFoundError(f"T32 setup cmm file not found, please check the input: {self._t32_config}.")
         self.elf_file = os.path.realpath(elf_path)
+        self.hex_file = hex_file if hex_file else os.path.splitext(self.elf_file)[0] + "_FF.hex"
         self.node = node
         self.protocol = protocol
         self.port = port
         self._debugger_process = None
         self.dbg = None
+
+    def open(self):
+        self.__enter__()
 
     def __enter__(self):
         self.logger.info("Enter __enter__")
@@ -65,18 +64,28 @@ class PythonLauterbach():
         time.sleep(5)
         self.dbg = t32.connect(node=self.node, port=self.port, protocol=self.protocol, timeout=10.0)
         self.dbg.cmd('Area.Reset')
-        self.dbg.cmm(self._setup_cmm)
+        self.dbg.cmd("SYStem.CONFIG.DAP.USER1 Out")
+        self.dbg.cmd("SYStem.CONFIG.DAP.USER1 Set High")
+        self.dbg.cmm(os.path.realpath(self._setup_cmm))
+        self.dbg.cmd("SYStem.CONFIG.DAP.USER1 Out")
+        self.dbg.cmd("SYStem.CONFIG.DAP.USER1 Set High")
         self.dbg.cmd(r"system.up")
-        if os.path.exists(self.elf_file):
-            self.dbg.cmd(f'Data.LOAD.Elf "{self.elf_file}" /DIFF /SingleLineAdjacent')
-            #TODO: to be removed if use the system.detect cpu to detect the right cpu
-            self.dbg.cmd("DO ~~/demo/tricore/flash/tc38x.cmm CPU=TC387QP PREPAREONLY")
-            time.sleep(10)
-            self.dbg.cmd("FLASH.ReProgram ALL")
-            time.sleep(3)
-            self.dbg.cmd(f'Data.LOAD.Elf {os.path.realpath(self.elf_file)}')
-            time.sleep(3)
-            self.dbg.cmd("FLASH.ReProgram OFF")
+        elf_file = os.path.realpath(self.elf_file)
+        if os.path.exists(elf_file) and os.path.exists(self.hex_file):
+            self.dbg.cmd(f'Data.LOAD.Elf "{elf_file}" /DIFF /SingleLineAdjacent')
+            if self.cpu and self.flash_cmm:
+                self.logger.info(f"Start flash hex file: {self.hex_file}")
+                self.dbg.cmd(f"DO {self.flash_cmm} CPU={self.cpu} PREPAREONLY")
+                time.sleep(10)
+                self.dbg.cmd("FLASH.ReProgram ALL")
+                time.sleep(3)
+                self.dbg.cmd(f'Data.LOAD.auto {os.path.realpath(self.hex_file)}')
+                time.sleep(3)
+                self.dbg.cmd("FLASH.ReProgram OFF")
+                self.logger.info("End of hex file flashing.")
+            else:
+                self.logger.warning("No cpu and flash cmm file was set, no automatically flash will be done.")
+            self.dbg.cmd(f'Data.LOAD.Elf "{elf_file}" /nocode')
             time.sleep(10)
         self.dbg.cmd(r"system.up")
         self.dbg.cmd(r"go")
@@ -84,7 +93,7 @@ class PythonLauterbach():
         return self
         
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, *args):
         self.logger.info("Enter __exit__")
         if self.dbg:
             self.dbg.cmd("QUIT")
@@ -98,6 +107,8 @@ class PythonLauterbach():
         if self.dbg:
             self.dbg.cmd("QUIT")
             self.dbg = None
+
+
 
     def load_symbol_from_elf(self, elf):
         """load symbol from a elf file, this will not download dat to MCU.
@@ -122,14 +133,17 @@ class PythonLauterbach():
         Returns:
             _type_: the sting
         """
-        tmp_list = []
-        for i in range(0,max_len,1):
-            tmp = self.dbg.variable.read(f"{var}[{i}]").value
-            if tmp > 0:
-                tmp_list.append(chr(tmp))
-            else:
-                break
-        return "".join(tmp_list)
+        if not self._check_var_exist(var):
+            return None
+        else:
+            tmp_list = []
+            for i in range(0,max_len,1):
+                tmp = self.dbg.variable.read(f"{var}[{i}]").value
+                if tmp > 0:
+                    tmp_list.append(chr(tmp))
+                else:
+                    break
+            return "".join(tmp_list)
 
     def read_string_pointer_variable_value(self, var, max_len):
         """Get the value of a string arrary global variable, return a string.
@@ -143,16 +157,19 @@ class PythonLauterbach():
         Returns:
             _type_: the sting
         """
-        tmp_list = []
-        tmp_addr = self.dbg.memory.read_uint32(address=self.dbg.address(access='D', value=self.dbg.symbol.query_by_name(name=var).address.value))
-        for i in range(0,max_len,1):
-            tmp = self.dbg.memory.read_uint8(address=self.dbg.address(access='D', value=tmp_addr))
-            tmp_addr += 1
-            if tmp > 0:
-                tmp_list.append(chr(tmp))
-            else:
-                break
-        return "".join(tmp_list)
+        if not self._check_var_exist(var):
+            return None
+        else:
+            tmp_list = []
+            tmp_addr = self.dbg.memory.read_uint32(address=self.dbg.address(access='D', value=self.dbg.symbol.query_by_name(name=var).address.value))
+            for i in range(0,max_len,1):
+                tmp = self.dbg.memory.read_uint8(address=self.dbg.address(access='D', value=tmp_addr))
+                tmp_addr += 1
+                if tmp > 0:
+                    tmp_list.append(chr(tmp))
+                else:
+                    break
+            return "".join(tmp_list)
 
     def write_string_array_variable_value(self, var, value):
         """Write the value of a string arrary global variable, return a string.
@@ -164,10 +181,20 @@ class PythonLauterbach():
         Returns:
             _type_: 0 means write without issue.
         """
-        for i in range(0,len(value),1):
-            self.dbg.variable.write(f"{var}[{i}]", value[i])
+        if not self._check_var_exist(var):
+            return None
+        else:
+            for i in range(0,len(value),1):
+                self.dbg.variable.write(f"{var}[{i}]", value[i])
             
         return 0
+
+    def _check_var_exist(self, var):
+        addr = self.dbg.symbol.query_by_name(var).address.value
+        if  addr == 0xffffffff:
+            return None
+        else:
+            return addr
 
     def read_variable_value(self, var):
         """read variable value
@@ -178,7 +205,15 @@ class PythonLauterbach():
         Returns:
             _type_: var value
         """
-        return self.dbg.variable.read(var).value
+        if not self._check_var_exist(var):
+            return None
+        else:
+            try:
+                value = self.dbg.variable.read(var).value
+            except :
+                value = None
+            self.logger.info("Read var {} with value {}".format(var, value))
+            return value
     
     def write_variable_value(self, var, value):
         """write variable value
@@ -190,6 +225,10 @@ class PythonLauterbach():
         Returns:
             _type_: var value
         """
-        return self.dbg.variable.write(var, value)
+        if not self._check_var_exist(var):
+            return None
+        else:
+            self.logger.info("Write var {} with value {}".format(var, value))
+            return self.dbg.variable.write(var, value)
 
 
