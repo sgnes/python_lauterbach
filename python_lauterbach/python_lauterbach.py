@@ -9,29 +9,13 @@ from loguru import logger as loguru_logger
 
 class PythonLauterbach():
     """A python lib to easy connect with Lauterbach"""
-    def __init__(self,t32_path, elf_path, setup_cmm, cpu = "TC387QP", flash_cmm = "~~/demo/tricore/flash/tc38x.cmm",hex_file=None, logger=None, t32_config="config.t32", protocol="TCP", node="localhost", port=20000) -> None:
-        """_summary_
-
-        Args:
-            t32_path (string): T32 full path, "C:\T32\bin\windows64\t32mtc.exe" for Aurix.
-            elf_path (string): full path of the elf file for debug.
-            setup_cmm (string): a setup a cmm file, setup cpu, mutil core setting...
-            cpu (str, optional): CPU model. Defaults to "TC387QP".
-            flash_cmm (str, optional): the flash cmm privded by Lauterbach. Defaults to "~~/demo/tricore/flash/tc38x.cmm".
-            hex_file (string, optional): hex file name. Defaults to None.
-            logger (object, optional): logger object. Defaults to None.
-            t32_config (str, optional): T32 connfig file. Defaults to "config.t32".
-            protocol (str, optional): RCL protocol. Defaults to "TCP".
-            node (str, optional): RCL host. Defaults to "localhost".
-            port (int, optional): RCL Port. Defaults to 20000.
-
-        Raises:
-            FileNotFoundError: _description_
-        """
+    def __init__(self,t32_path, elf_path, setup_cmm, cpu = "TC387QP", flash_cmm = "~~/demo/tricore/flash/tc38x.cmm",hex_file=None, logger=None, t32_config="config.t32", protocol="TCP", node="localhost", port=20000, timeout=200) -> None:
+        
         self.logger = logger if logger else loguru_logger
         self.logger.info("Enter init with parameters %s  %s, %s", t32_path, elf_path, setup_cmm)
         self._t32_path = t32_path
         self.cpu = cpu
+        self.timeoout = timeout
         self.flash_cmm = flash_cmm
         if os.path.exists(self._t32_path):
             self._t32_root = self._t32_path.split("bin")[0]
@@ -74,15 +58,7 @@ class PythonLauterbach():
         if os.path.exists(elf_file) and os.path.exists(self.hex_file):
             self.dbg.cmd(f'Data.LOAD.Elf "{elf_file}" /DIFF /SingleLineAdjacent')
             if self.cpu and self.flash_cmm:
-                self.logger.info(f"Start flash hex file: {self.hex_file}")
-                self.dbg.cmd(f"DO {self.flash_cmm} CPU={self.cpu} PREPAREONLY")
-                time.sleep(10)
-                self.dbg.cmd("FLASH.ReProgram ALL")
-                time.sleep(3)
-                self.dbg.cmd(f'Data.LOAD.auto {os.path.realpath(self.hex_file)}')
-                time.sleep(3)
-                self.dbg.cmd("FLASH.ReProgram OFF")
-                self.logger.info("End of hex file flashing.")
+                self.download_hex_file(self.hex_file)
             else:
                 self.logger.warning("No cpu and flash cmm file was set, no automatically flash will be done.")
             self.dbg.cmd(f'Data.LOAD.Elf "{elf_file}" /nocode')
@@ -91,6 +67,32 @@ class PythonLauterbach():
         self.dbg.cmd(r"go")
         self.logger.info("Exit __enter__")
         return self
+    
+    def download_hex_file(self, hexfile=None):
+        if self.cpu and self.flash_cmm:
+            self.dbg.cmd(r"system.down")
+            self.dbg.cmd(r"system.up")
+            self.logger.info(f"Start flash hex file: {hexfile}")
+            self.dbg.cmd(f"DO {self.flash_cmm} CPU={self.cpu} PREPAREONLY")
+            time.sleep(3)
+            self.dbg.cmd("FLASH.ReProgram ALL")
+            time.sleep(3)
+            self.dbg.cmd(f'Data.LOAD.auto {os.path.realpath(hexfile)}')
+            time.sleep(3)
+            self.dbg.cmd("FLASH.ReProgram OFF")
+            retry_count = 0
+            while retry_count < (self.timeoout/5):
+                time.sleep(5)
+                try:
+                    self.dbg.cmd("Var.Watch")
+                    break
+                except:
+                    self.logger.info("Flashing ongoing.")
+            
+            self.dbg.cmd(r"system.up")
+            self.dbg.cmd(r"go")
+
+            self.logger.info("End of hex file flashing.")
         
 
     def __exit__(self, *args):
